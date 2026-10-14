@@ -1,0 +1,11 @@
+FreightTiger pipeline reproducibility check
+Runs compared          : 3
+Inputs                 : data/raw/shipment_records.csv, data/raw/context_notes.csv (unchanged)
+Procedure              : python3 main.py --output <tmp/runN.csv>, three times; compare SHA-256 of generated CSV bytes
+
+Run 1: exit=0 sha256=394d5aa5c5bf3ce20fb2b8908937ab435761667d87d4ad6cd43eda1d670b698a
+Run 2: exit=0 sha256=394d5aa5c5bf3ce20fb2b8908937ab435761667d87d4ad6cd43eda1d670b698a
+Run 3: exit=0 sha256=394d5aa5c5bf3ce20fb2b8908937ab435761667d87d4ad6cd43eda1d670b698a
+
+Byte-identical across 3 runs: PASS
+
