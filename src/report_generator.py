@@ -27,7 +27,10 @@ populated only for rows that are both detector-flagged and justified
 other row, including normal weeks where a note merely coincides. For
 flagged rows the ``reason`` quotes the evidence (matched note or why
 none applies); non-flagged rows get a fixed no-anomaly sentence and
-never quote notes.
+never quote notes. An optional ``reason_overrides`` mapping may replace
+``reason`` text on flagged+justified rows only (used for grounded LLM
+rewrites); flags, numbers, and ``matched_note_id`` are never affected
+by overrides.
 """
 
 from __future__ import annotations
@@ -94,12 +97,18 @@ def build_rows(
     metrics: Sequence[RouteWeekMetrics],
     anomalies: Sequence[AnomalyResult],
     verdicts: Sequence[EvidenceVerdict],
+    reason_overrides: dict[tuple[str, object], str] | None = None,
 ) -> list[ReportRow]:
     """Join metrics, anomaly results, and verdicts into formatted rows.
 
     Inputs are aligned by ``(route, week_of)``; any missing or duplicate
     alignment raises ``ReportFormatError``. One row is produced per
     route-week metric, in the metrics' deterministic order.
+
+    ``reason_overrides`` may supply replacement ``reason`` text (e.g. an
+    LLM rewrite) keyed by ``(route, week_of)``. Overrides are applied
+    only to rows that are both detector-flagged and evidence-justified,
+    and never affect flags, numbers, or ``matched_note_id``.
     """
     anomaly_by_key: dict[tuple[str, object], AnomalyResult] = {}
     for a in anomalies:
@@ -127,8 +136,9 @@ def build_rows(
             raise ReportFormatError(f"missing evidence verdict for {key}")
         anomaly = anomaly_by_key[key]
         verdict = verdict_by_key[key]
+        override = reason_overrides.get(key) if reason_overrides else None
         rows.append(
-            _format_row(metric, anomaly, verdict)
+            _format_row(metric, anomaly, verdict, reason_override=override)
         )
     return rows
 
@@ -168,10 +178,11 @@ def generate_report(
     verdicts: Sequence[EvidenceVerdict],
     output_path: str | Path = DEFAULT_OUTPUT_PATH,
     template_path: str | Path = DEFAULT_TEMPLATE_PATH,
+    reason_overrides: dict[tuple[str, object], str] | None = None,
 ) -> list[ReportRow]:
     """Validate the template contract, build rows, and write the CSV."""
     validate_columns_against_template(template_path)
-    rows = build_rows(metrics, anomalies, verdicts)
+    rows = build_rows(metrics, anomalies, verdicts, reason_overrides)
     write_output(rows, output_path)
     return rows
 
@@ -180,12 +191,17 @@ def _format_row(
     metric: RouteWeekMetrics,
     anomaly: AnomalyResult,
     verdict: EvidenceVerdict,
+    reason_override: str | None = None,
 ) -> ReportRow:
     flagged_cell = _flagged_cell(anomaly.flagged, verdict.justified)
     alert_cleared = anomaly.flagged and verdict.justified
     matched_note_id = verdict.matched_note_id if alert_cleared else ""
     if anomaly.flagged:
-        reason = verdict.explanation
+        reason = (
+            reason_override
+            if alert_cleared and reason_override
+            else verdict.explanation
+        )
     else:
         reason = NO_ANOMALY_REASON
     return ReportRow(

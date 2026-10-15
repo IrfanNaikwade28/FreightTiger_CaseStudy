@@ -1,4 +1,6 @@
 # No third-party dependencies are required.
 # The pipeline uses only the Python 3.10+ standard library
-# (csv, dataclasses, datetime, argparse, unittest, pathlib, ...).
+# (csv, dataclasses, datetime, argparse, unittest, pathlib,
+# urllib.request, ...). The optional --llm layer (Groq) also uses
+# only the standard library; no Groq SDK is installed or needed.
 # Verified on Python 3.14.7.

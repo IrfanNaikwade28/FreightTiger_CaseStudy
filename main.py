@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from anomaly_detection import detect_anomalies  # noqa: E402
 from cost_analysis import ShipmentDataError, analyze_shipments  # noqa: E402
+from llm_explainer import DEFAULT_MAX_CALLS, build_explainer  # noqa: E402
 from note_retriever import (  # noqa: E402
     NoteDataError,
     build_evidence,
@@ -64,6 +65,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=ROOT / "output" / "output.csv",
         help="Path for the generated output CSV",
     )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help=(
+            "Use Groq (OpenAI-compatible API, requires "
+            "FREIGHTTIGER_LLM_API_KEY) to rewrite the reason text of "
+            "flagged, evidence-justified anomalies. Without a key the "
+            "run stays offline and deterministic."
+        ),
+    )
+    parser.add_argument(
+        "--llm-max-calls",
+        type=int,
+        default=DEFAULT_MAX_CALLS,
+        help=f"Hard cap on LLM calls per run (default {DEFAULT_MAX_CALLS})",
+    )
     return parser
 
 
@@ -72,15 +89,33 @@ def run(args: argparse.Namespace) -> int:
     anomalies = detect_anomalies(metrics)
     evidences = build_evidence(load_notes(args.notes))
     verdicts = evaluate_route_weeks(metrics, evidences)
+
+    verdict_by_key = {(v.route, v.week_of): v for v in verdicts}
+    explainer = build_explainer(args.llm, max_calls=args.llm_max_calls)
+    reason_overrides: dict[tuple[str, object], str] = {}
+    if explainer.config.enabled:
+        for anomaly in anomalies:
+            if not anomaly.flagged:
+                continue
+            key = (anomaly.metrics.route, anomaly.metrics.week_of)
+            verdict = verdict_by_key[key]
+            if not verdict.justified:
+                continue
+            text = explainer.explain_justified(
+                anomaly.metrics, anomaly.flagged, verdict
+            )
+            if text is not None:
+                reason_overrides[key] = text
+
     rows = generate_report(
         metrics,
         anomalies,
         verdicts,
         output_path=args.output,
         template_path=args.template,
+        reason_overrides=reason_overrides,
     )
 
-    verdict_by_key = {(v.route, v.week_of): v for v in verdicts}
     detector_flagged = 0
     justified_flagged = 0
     for anomaly in anomalies:
@@ -104,6 +139,50 @@ def run(args: argparse.Namespace) -> int:
         f"  display cells         : {display_yes} 'Yes', "
         f"{display_justified} 'No (justified)'"
     )
+    usage = explainer.usage
+    if usage.mode == "online":
+        if usage.estimated_cost_usd is not None:
+            cost = f"${usage.estimated_cost_usd:.6f}"
+        elif usage.errors and usage.errors == usage.calls:
+            cost = "none (no successful calls)"
+        else:
+            cost = "unknown (model not in pricing table)"
+        print(
+            f"  llm explanations      : online, model={usage.model}, "
+            f"calls={usage.calls}, prompt_tokens={usage.prompt_tokens}, "
+            f"completion_tokens={usage.completion_tokens}, est_cost={cost}, "
+            f"errors={usage.errors}, fallbacks={usage.fallbacks}"
+        )
+        if usage.usage_metadata_missing:
+            print(
+                "  llm usage metadata    : missing on "
+                f"{usage.usage_metadata_missing} call(s); token counts "
+                "exclude those calls"
+            )
+        for record in usage.error_records[:5]:
+            status = (
+                f"http_{record.http_status}"
+                if record.http_status is not None
+                else record.kind
+            )
+            ray = f" ray={record.ray_id}" if record.ray_id else ""
+            print(
+                f"  llm error             : call#{record.call_index} "
+                f"{status}{ray}: {record.message}"
+            )
+        if len(usage.error_records) > 5:
+            print(
+                f"  llm error             : ... "
+                f"{len(usage.error_records) - 5} more not shown"
+            )
+    elif args.llm:
+        print(
+            "  llm explanations      : requested but no API key found "
+            "(FREIGHTTIGER_LLM_API_KEY); ran offline with deterministic "
+            "reasons"
+        )
+    else:
+        print("  llm explanations      : offline (deterministic reasons)")
     print(f"  output written to     : {args.output}")
     return 0
 

@@ -28,18 +28,19 @@ src/
   cost_analysis.py          Load/validate shipments; weekly aggregation; baselines
   anomaly_detection.py      +20% threshold flagging (independent of justification)
   note_retriever.py         Deterministic note parsing, matching, evidence verdicts
+  llm_explainer.py          Optional Groq rewrites of justified-anomaly reasons only
   report_generator.py       Template-exact CSV rows and serialization
-tests/test_pipeline.py      24 automated tests (stdlib unittest)
+tests/                      41 automated tests (stdlib unittest; pipeline + LLM layer)
 reports/
-  run_reproducibility_check.py  3-run byte-comparison harness
+  run_reproducibility_check.py  3-run comparison harness (offline bytes / online non-reason cols)
   reproducibility_check.txt     Result of the check
   evaluation_report.md          Test + pipeline metrics
-  ai_usage_cost_report.md       Honest zero-LLM usage accounting
+  ai_usage_cost_report.md       Honest usage accounting (0 real API calls here)
 data/raw/                   Supplied inputs (unmodified)
 output/output.csv           Generated deliverable
 ```
 
-Design principle: calculations, baselines, flags, and evidence validation are pure deterministic Python. Any future LLM layer may only paraphrase already-validated findings; it can never change verdicts or numbers.
+Design principle: calculations, baselines, flags, and evidence validation are pure deterministic Python. The optional LLM layer only paraphrases already-validated findings; it can never change verdicts or numbers.
 
 ## Formulas
 
@@ -94,15 +95,33 @@ route, week_of, cost_per_tonne_km, vs_own_history, vs_similar_routes, flagged, m
 
 ## Testing
 
-python3 -m unittest discover -s tests -v runs 24 tests covering weighted cost vs mean-of-ratios, Monday grouping, baseline windows (exclusion of current week, at most 8 priors, no padding), peer exclusion, +20% inclusivity, evidence route/date matching, no-impact rejection, header contract, N/A handling, the three-case flagged display mapping with note-id population rules, and determinism. Full results are in reports/evaluation_report.md.
+python3 -m unittest discover -s tests -v runs 41 tests covering weighted cost vs mean-of-ratios, Monday grouping, baseline windows (exclusion of current week, at most 8 priors, no padding), peer exclusion, +20% inclusivity, evidence route/date matching, no-impact rejection, header contract, N/A handling, the three-case flagged display mapping with note-id population rules, determinism, and the LLM layer (Groq defaults, offline zero-calls, call bounds, usage/cost accounting, fallbacks on empty/ungrounded/failed responses, non-reason field invariance). Full results are in reports/evaluation_report.md.
 
 ## Reproducibility
 
-python3 reports/run_reproducibility_check.py runs main.py three times against unchanged inputs and compares SHA-256 of the CSV bytes; the result is saved to reports/reproducibility_check.txt. Latest result: PASS, all three runs byte-identical. All logic is deterministic (no randomness, no clock dependence, no LLM).
+python3 reports/run_reproducibility_check.py runs main.py three times against unchanged inputs and compares SHA-256 of the CSV bytes; the result is saved to reports/reproducibility_check.txt. Latest result: PASS, all three runs byte-identical (hash 394d5aa5…b698a). With `--llm` and no API key the runs stay offline and are still byte-compared; with a key, the harness compares every column except `reason` (LLM wording may vary; flags/numbers/note ids must not). All deterministic logic has no randomness, no clock dependence, and no LLM.
 
-## AI usage
+## AI usage (optional Groq layer)
 
-Zero LLM calls at runtime; zero tokens; zero cost. Retrieval and explanations are rule-based and template-generated from note fields - an intentional guardrail-first choice, since the brief warns that a confident wrong reason scores worse than "could not find one." With only 10 notes, exact/rule retrieval is fully auditable and cannot hallucinate. See reports/ai_usage_cost_report.md for the full accounting. An optional LLM paraphrase layer could be added later behind a flag, instrumented for measured token usage, without touching verdicts or numbers.
+Default runs make **zero** LLM calls: retrieval and explanations are rule-based and template-generated from note fields — an intentional guardrail-first choice, since the brief warns that a confident wrong reason scores worse than "could not find one."
+
+An optional **Groq-only** layer (`src/llm_explainer.py`, stdlib `urllib.request`, no SDK) can rewrite the `reason` text of the 3 flagged + evidence-justified rows. It is off by default; without `FREIGHTTIGER_LLM_API_KEY` the pipeline stays offline and byte-identical. It never touches flags, numbers, or note ids, and any failure falls back to the deterministic explanation. This submission made **0 real API calls** (no key in the preparation environment); measured usage/cost is reported only when online. See reports/ai_usage_cost_report.md.
+
+Run with Groq (values may live in environment variables or in a project-root `.env` file — loaded automatically by a stdlib loader; existing environment values always win, and the key is never printed):
+
+```bash
+# option A: project-root .env (auto-loaded from any working directory)
+#   FREIGHTTIGER_LLM_API_KEY=gsk_...
+#   FREIGHTTIGER_LLM_BASE_URL=https://api.groq.com/openai/v1   # optional
+#   FREIGHTTIGER_LLM_MODEL=qwen/qwen3.8-27b                    # optional
+python3 main.py --llm
+
+# option B: export in the shell
+export FREIGHTTIGER_LLM_API_KEY=gsk_...   # from https://console.groq.com/keys
+python3 main.py --llm
+
+python3 reports/run_reproducibility_check.py --llm   # non-reason-column comparison
+```
 
 ## Limitations
 

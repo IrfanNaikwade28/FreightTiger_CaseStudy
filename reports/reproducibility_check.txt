@@ -1,4 +1,5 @@
 FreightTiger pipeline reproducibility check
+Mode                   : offline (default)
 Runs compared          : 3
 Inputs                 : data/raw/shipment_records.csv, data/raw/context_notes.csv (unchanged)
 Procedure              : python3 main.py --output <tmp/runN.csv>, three times; compare SHA-256 of generated CSV bytes
